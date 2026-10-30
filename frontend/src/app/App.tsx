@@ -1,126 +1,282 @@
-import { useRef, useState } from "react";
-import { analyzeImage } from "../services/api";
-import type { ImageAnalysis } from "../types/image";
+import { useCallback, useEffect, useState } from "react";
+import { TopBar } from "../components/TopBar";
+import { AssetFilmstrip } from "../features/assets/AssetFilmstrip";
+import { ImageStudio } from "../features/image-studio/ImageStudio";
+import { MayaPanel } from "../features/maya/MayaPanel";
+import { ProjectModal } from "../features/projects/ProjectModal";
+import {
+  createProject,
+  deleteAsset,
+  listAssets,
+  listOperations,
+  listProjects,
+  uploadAsset,
+} from "../services/api";
+import type { Asset } from "../types/asset";
+import type { PlanExecutionResult, Workflow } from "../types/maya";
+import type { OperationRecord } from "../types/operation";
+import type { Project, ProjectCreate } from "../types/project";
 
-const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_BYTES = 10 * 1024 * 1024;
+export default function App() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [activeAsset, setActiveAsset] = useState<Asset | null>(null);
+  const [operations, setOperations] = useState<OperationRecord[]>([]);
 
-function BrandMark() {
-  return <span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>;
-}
+  const [activeTab, setActiveTab] = useState<"studio" | "maya">("studio");
+  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [appError, setAppError] = useState<string | null>(null);
 
-function ImageWorkspace() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [result, setResult] = useState<ImageAnalysis | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  function selectFile(next?: File) {
-    setError("");
-    setResult(null);
-    if (!next) return;
-    if (!ACCEPTED_TYPES.includes(next.type)) return setError("Choose a JPEG, PNG, or WebP image.");
-    if (next.size > MAX_BYTES) return setError("The image must be 10 MB or smaller.");
-    if (preview) URL.revokeObjectURL(preview);
-    setFile(next);
-    setPreview(URL.createObjectURL(next));
-  }
-
-  async function runAnalysis() {
-    if (!file) return;
-    setLoading(true);
-    setError("");
-    setResult(null);
+  // Load project assets and operations
+  const loadProjectData = useCallback(async (projectId: string) => {
     try {
-      setResult(await analyzeImage(file));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Analysis failed. Please try again.");
-    } finally {
-      setLoading(false);
+      const [projAssets, projOps] = await Promise.all([
+        listAssets(projectId),
+        listOperations(projectId),
+      ]);
+      setAssets(projAssets);
+      setOperations(projOps);
+      // Select latest asset if current selection is invalid
+      setActiveAsset((prev) => {
+        if (prev && projAssets.some((a) => a.id === prev.id)) {
+          return prev;
+        }
+        return projAssets[0] || null;
+      });
+    } catch (err) {
+      setAppError(err instanceof Error ? err.message : "Failed to load project assets.");
+    }
+  }, []);
+
+  // Initialize or fetch projects on mount
+  useEffect(() => {
+    let isMounted = true;
+    async function init() {
+      setIsLoading(true);
+      try {
+        let projs = await listProjects();
+        if (projs.length === 0) {
+          const defaultProject = await createProject({
+            name: "Studio Session",
+            description: "Default creative project",
+          });
+          projs = [defaultProject];
+        }
+        if (isMounted) {
+          setProjects(projs);
+          const initial = projs[0];
+          setCurrentProject(initial);
+          await loadProjectData(initial.id);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setAppError(err instanceof Error ? err.message : "Failed to connect to MayaChitram API.");
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    }
+    init();
+    return () => {
+      isMounted = false;
+    };
+  }, [loadProjectData]);
+
+  // Handle Project Selection
+  async function handleSelectProject(projectId: string) {
+    const found = projects.find((p) => p.id === projectId);
+    if (found) {
+      setCurrentProject(found);
+      await loadProjectData(found.id);
     }
   }
 
-  function reset() {
-    if (preview) URL.revokeObjectURL(preview);
-    setFile(null); setPreview(null); setResult(null); setError("");
-    if (inputRef.current) inputRef.current.value = "";
+  // Handle Project Creation
+  async function handleCreateProject(data: ProjectCreate) {
+    const created = await createProject(data);
+    setProjects((prev) => [created, ...prev]);
+    setCurrentProject(created);
+    setAssets([]);
+    setActiveAsset(null);
+    setOperations([]);
   }
 
-  return <section className="workspace" aria-label="Image analysis workspace">
-    <div className="section-heading">
-      <div><p className="eyebrow">IMAGE ENGINE / 01</p><h2>See beyond the image.</h2>
-        <p className="muted">Turn visual input into a structured understanding of the scene.</p></div>
-      <span className="status"><i /> ENGINE INTERFACE</span>
-    </div>
-    <div className="workspace-grid">
-      <article className="panel">
-        <div className="panel-label"><span>01</span> INPUT IMAGE</div>
-        <input ref={inputRef} className="hidden-input" type="file" accept="image/jpeg,image/png,image/webp"
-          aria-label="Choose an image" onChange={e => selectFile(e.target.files?.[0])} />
-        {preview ? <div className="preview"><img src={preview} alt="Selected image preview" />
-          <button className="remove" onClick={reset} aria-label="Remove selected image">×</button></div> :
-          <button className="dropzone" onClick={() => inputRef.current?.click()}>
-            <span className="upload-symbol">↑</span><strong>Drop an image here</strong>
-            <span className="muted">or click to browse files</span><small>JPG · PNG · WEBP · MAX 10 MB</small>
-          </button>}
-        {file && <div className="file-row"><span className="file-badge">IMG</span>
-          <span className="file-name"><strong>{file.name}</strong><small>{(file.size / 1048576).toFixed(2)} MB</small></span>
-          <span className="ready">READY</span></div>}
-        <div className="panel-footer"><p className="privacy">◇ Images are not stored by this application.</p>
-          <button className="primary" disabled={!file || loading} onClick={runAnalysis}>
-            {loading ? <><span className="spinner" /> Analyzing…</> : <>Analyze image <span>↗</span></>}
-          </button>
-        </div>
-      </article>
-      <article className="panel result-panel" aria-live="polite">
-        <div className="panel-label"><span>02</span> INTELLIGENCE REPORT {result && <b className="complete">COMPLETE</b>}</div>
-        {!result && !loading && !error && <div className="empty-state">
-          <div className="visual-orbit"><div>✳</div></div><h3>Your report starts here</h3>
-          <p>Scene description and visible-object observations will appear here after analysis.</p>
-          <div className="capabilities"><span>SCENE</span><span>OBJECTS</span><span>CONTEXT</span></div>
-        </div>}
-        {loading && <div className="empty-state"><span className="spinner big" /><h3>Reading the visual world</h3>
-          <p>Analyzing scene details and visible objects. This may take a few seconds.</p></div>}
-        {error && <div className="empty-state error" role="alert"><h3>Analysis could not complete</h3><p>{error}</p>
-          <button className="secondary" disabled={!file || loading} onClick={runAnalysis}>Try again</button></div>}
-        {result && <div className="report">
-          <div className="report-section"><label>SCENE DESCRIPTION</label><p>{result.description}</p></div>
-          <div className="report-section"><label>VISIBLE OBJECTS <span className="count">{result.objects.length}</span></label>
-            <div className="chips">{result.objects.map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}</div></div>
-          <div className="meta"><span>PROVIDER <b>{result.provider}</b></span><span>MODEL <b>{result.model}</b></span></div>
-          {result.caveats.map(c => <p className="caveat" key={c}>ⓘ {c}</p>)}
-          <button className="secondary" onClick={reset}>Analyze another image</button>
-        </div>}
-      </article>
-    </div>
-    <p className="footnote">MAYACHITRAM INTELLIGENCE SYSTEMS <span>•</span> IMAGE ENGINE V1.0 <span>•</span> MODEL OUTPUTS MAY BE INACCURATE</p>
-  </section>;
-}
+  // Handle Image Upload
+  async function handleUploadFile(file: File) {
+    if (!currentProject) return;
+    setIsUploading(true);
+    setAppError(null);
+    try {
+      const newAsset = await uploadAsset(currentProject.id, file);
+      setAssets((prev) => [newAsset, ...prev]);
+      setActiveAsset(newAsset);
+      // Refresh project asset count
+      setProjects((prev) =>
+        prev.map((p) => (p.id === currentProject.id ? { ...p, asset_count: p.asset_count + 1 } : p))
+      );
+    } catch (err) {
+      setAppError(err instanceof Error ? err.message : "Failed to upload asset.");
+    } finally {
+      setIsUploading(false);
+    }
+  }
 
-export default function App() {
-  return <div className="app-shell">
-    <header className="topbar"><a className="brand" href="/"><BrandMark /><strong>Maya<span>Chitram</span></strong>
-      <i className="divider" /><small>INTELLIGENCE PLATFORM</small></a>
-      <div className="top-actions"><span className="environment"><i /> V1.0 PREVIEW</span>
-        <a className="api-docs" href="http://localhost:8000/docs" target="_blank" rel="noreferrer">API DOCS ↗</a></div>
-    </header>
-    <main>
-      <section className="hero"><div className="hero-copy"><p className="eyebrow"><i /> ONE PLATFORM. MANY ENGINES.</p>
-        <h1>Intelligence for<br /><span>the visual world.</span></h1>
-        <p>MayaChitram turns visual input into structured understanding. The Image Engine is the first building block in a growing system of specialized AI engines.</p>
-        <div className="metrics"><div><strong>01</strong><small>ACTIVE ENGINE</small></div><i /><div><strong>∞</strong><small>ROOM TO EXPAND</small></div></div>
-      </div><div className="hero-art" aria-hidden="true"><div className="grid-lines" /><div className="ring ring-a" /><div className="ring ring-b" /><div className="ring ring-c" />
-        <div className="scanline" /><div className="art-core"><BrandMark /><small>MC / 001</small></div>
-        <small className="coordinate top-left">VISUAL<br />PERCEPTION</small><small className="coordinate bottom-right">IMAGE ENGINE<br />V1.0.0</small><b className="cross">+</b></div></section>
-      <section className="engine-directory"><span className="directory-label">ENGINE DIRECTORY</span>
-        <div className="engine active"><span className="engine-glyph">◈</span><span><b>Image Engine</b><small>ACTIVE · V1.0</small></span><span className="arrow">↗</span></div>
-        <div className="engine planned"><span className="engine-glyph">◌</span><span><b>Similarity Engine</b><small>PLANNED</small></span></div>
-        <div className="engine planned"><span className="engine-glyph">⌘</span><span><b>Future Engines</b><small>EXTENSIBLE</small></span></div>
-      </section>
-      <ImageWorkspace />
-    </main>
-    <footer><span className="footer-brand"><BrandMark /> MAYACHITRAM</span><span>BUILT FOR CLARITY. DESIGNED TO SCALE.</span><span>V1.0.0 <i>●</i> DEVELOPMENT</span></footer>
-  </div>;
+  // Handle Asset Deletion
+  async function handleDeleteAsset(assetId: string) {
+    if (!currentProject) return;
+    try {
+      await deleteAsset(currentProject.id, assetId);
+      setAssets((prev) => prev.filter((a) => a.id !== assetId));
+      if (activeAsset?.id === assetId) {
+        setActiveAsset(assets.find((a) => a.id !== assetId) || null);
+      }
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === currentProject.id ? { ...p, asset_count: Math.max(0, p.asset_count - 1) } : p
+        )
+      );
+    } catch (err) {
+      setAppError(err instanceof Error ? err.message : "Failed to delete asset.");
+    }
+  }
+
+  // Handle Output Asset Created from Studio Tool
+  function handleAssetCreated(newAsset: Asset) {
+    setAssets((prev) => [newAsset, ...prev]);
+    setActiveAsset(newAsset);
+    if (currentProject) {
+      loadProjectData(currentProject.id);
+    }
+  }
+
+  // Handle Plan Executed in Maya
+  function handlePlanExecuted(result: PlanExecutionResult) {
+    if (result.final_asset) {
+      setAssets((prev) => [result.final_asset as Asset, ...prev]);
+      setActiveAsset(result.final_asset);
+    }
+    if (currentProject) {
+      loadProjectData(currentProject.id);
+    }
+  }
+
+  // Handle Workflow Executed in Maya
+  async function handleWorkflowExecuted(workflow?: Workflow) {
+    if (currentProject) {
+      try {
+        const [projAssets, projOps] = await Promise.all([
+          listAssets(currentProject.id),
+          listOperations(currentProject.id),
+        ]);
+        setAssets(projAssets);
+        setOperations(projOps);
+        if (workflow?.final_asset_ids?.length) {
+          const latestId = workflow.final_asset_ids[workflow.final_asset_ids.length - 1];
+          const newAsset = projAssets.find((a) => a.id === latestId);
+          if (newAsset) {
+            setActiveAsset(newAsset);
+            return;
+          }
+        }
+        setActiveAsset((prev) => {
+          if (prev && projAssets.some((a) => a.id === prev.id)) return prev;
+          return projAssets[0] || null;
+        });
+      } catch (err) {
+        setAppError(err instanceof Error ? err.message : "Failed to refresh project data.");
+      }
+    }
+  }
+
+  // Resolve parent asset for before/after comparison
+  const parentAsset = activeAsset?.parent_asset_id
+    ? assets.find((a) => a.id === activeAsset.parent_asset_id) || null
+    : null;
+
+  return (
+    <div className="app-shell">
+      <TopBar
+        currentProject={currentProject}
+        projects={projects}
+        onSelectProject={handleSelectProject}
+        onOpenNewProjectModal={() => setIsProjectModalOpen(true)}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+      />
+
+      <main>
+        {appError && (
+          <div className="tool-error" style={{ margin: "16px 0 0" }} role="alert">
+            {appError}
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="canvas-empty" style={{ margin: "40px 0" }}>
+            <span className="spinner big" />
+            <h3>Connecting to MayaChitram Creative Engine…</h3>
+          </div>
+        ) : (
+          <div className="studio-container">
+            {currentProject && (
+              <AssetFilmstrip
+                projectId={currentProject.id}
+                assets={assets}
+                activeAssetId={activeAsset?.id || null}
+                onSelectAsset={setActiveAsset}
+                onUploadFile={handleUploadFile}
+                onDeleteAsset={handleDeleteAsset}
+                isUploading={isUploading}
+              />
+            )}
+
+            {activeTab === "studio" && currentProject && (
+              <ImageStudio
+                projectId={currentProject.id}
+                activeAsset={activeAsset}
+                parentAsset={parentAsset}
+                assets={assets}
+                operations={operations}
+                onAssetCreated={handleAssetCreated}
+                onSelectAssetById={(id) => {
+                  const target = assets.find((a) => a.id === id);
+                  if (target) setActiveAsset(target);
+                }}
+              />
+            )}
+
+            {activeTab === "maya" && currentProject && (
+              <MayaPanel
+                projectId={currentProject.id}
+                activeAsset={activeAsset}
+                onPlanExecuted={handlePlanExecuted}
+                onWorkflowExecuted={handleWorkflowExecuted}
+                onSwitchToStudio={() => setActiveTab("studio")}
+              />
+            )}
+          </div>
+        )}
+      </main>
+
+      <ProjectModal
+        isOpen={isProjectModalOpen}
+        onClose={() => setIsProjectModalOpen(false)}
+        onCreate={handleCreateProject}
+      />
+
+      <footer>
+        <span className="footer-brand">
+          <span className="brand-mark" aria-hidden="true">
+            <i /><i /><i /><i />
+          </span>
+          MAYACHITRAM
+        </span>
+        <span>ONE ENGINE. TWO MODES. UNIFIED PERSISTENT STUDIO.</span>
+        <span>V1.0.0 <i>●</i> PRODUCTION READY</span>
+      </footer>
+    </div>
+  );
 }

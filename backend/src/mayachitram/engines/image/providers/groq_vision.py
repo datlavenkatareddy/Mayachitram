@@ -35,15 +35,21 @@ class GroqVisionProvider:
                 model=self._model,
                 temperature=0.2,
                 response_format={"type": "json_object"},
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:{mime_type};base64,{encoded}", "detail": "auto"
-                        }},
-                    ],
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{encoded}",
+                                    "detail": "auto",
+                                },
+                            },
+                        ],
+                    }
+                ],
             )
             payload = json.loads(response.choices[0].message.content or "{}")
             description = payload.get("description")
@@ -59,4 +65,6 @@ class GroqVisionProvider:
         except Exception as exc:
             if isinstance(exc, ProviderNotConfiguredError):
                 raise
-            raise ProviderAnalysisError("The vision provider could not analyze this image.") from exc
+            raise ProviderAnalysisError(
+                "The vision provider could not analyze this image."
+            ) from exc

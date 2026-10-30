@@ -18,3 +18,10 @@ coverage/
 .DS_Store
 Thumbs.db
 *.log
+data/*
+!data/.gitkeep
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+*.tsbuildinfo
